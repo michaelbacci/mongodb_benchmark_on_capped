@@ -30,7 +30,5 @@ endif()
 enable_testing()
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/benchmark ${CMAKE_CURRENT_BINARY_DIR}/benchmark)
 include_directories(${benchmark_SOURCE_DIR}/include ${benchmark_SOURCE_DIR})
-#set(gmock_LIBRARIES gmock gmock_main)
-
 
 add_subdirectory(src)

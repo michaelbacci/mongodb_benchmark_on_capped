@@ -6,28 +6,28 @@
 #include <mongo/client/dbclient.h>
 #include <memory>
 #include <cassert>
+#include <vector>
 
 namespace helper {
 
   mongo::DBClientConnection* GetConnection() {
-    mongo::DBClientConnection*connection = new mongo::DBClientConnection();
+    mongo::DBClientConnection* connection = new mongo::DBClientConnection();
 
     std::string err_msg;
 
     try {
       connection->connect(MONGO_HOST);
+      assert(connection->isStillConnected());
 
       if (!std::string(MONGO_DB_AUTH).empty())
-        connection->auth(MONGO_DB_AUTH, MONGO_DB_USER, MONGO_DB_PSWD, err_msg, true);
+        assert(connection->auth(MONGO_DB_AUTH, MONGO_DB_USER, MONGO_DB_PSWD, err_msg, true));
     }
     catch(const mongo::DBException &e) {
 
       if (!err_msg.size())
         std::cerr << "Connection Failed: " << e.what() << std::endl;
-
       assert(0);
     }
-
     return connection;
   }
 
@@ -35,51 +35,48 @@ namespace helper {
 
 static void BM_CappedFindAndModify(benchmark::State& state) {
   std::string mongodb_db = MONGO_DB;
-  std::string mongodb_collection = "test_v1";
+  std::string mongodb_collection = mongodb_db + ".benchmark_v1";
 
-  std::unique_ptr<mongo::DBClientConnection> connection(helper::GetConnection());
+//  std::unique_ptr<mongo::DBClientConnection> connection(helper::GetConnection());
+  auto *connection = helper::GetConnection();
 
   while (state.KeepRunning()) {
 
     state.PauseTiming();
-    std::cout << "A";
-    //TODO:destroy capped collection
-    //TODO:create capped collection
+
+    /* Create a new the capped collection */
     mongo::BSONObj info;
-    connection->createCollection(mongodb_collection, state.range_x()*64, true, state.range_x(), &info);
-    std::cout << info.toString();
-    //TODO:fill the data
+    connection->dropCollection(mongodb_collection, &info);
+    connection->createCollection(mongodb_collection, state.range_x()*1024, true, state.range_x(), &info);
+    assert(info.begin().next().toString() == "ok: 1.0");
+
+    /* Filling Up MongoDB */
+    mongo::BSONObj data = BSON("data" << "__here_the_data__" << "computed" << 0);
+    std::vector<mongo::BSONObj> v(state.range_x(), data);
+    connection->insert(mongodb_collection, v);
+
     state.ResumeTiming();
 
-    mongo::BSONObj result;
-    mongo::BSONObjBuilder query;
-    query << "findandmodify" << mongodb_collection <<
-        "query" << BSON("computed" << false) <<
-        "update" << BSON("computed" << true);
+    auto counter = state.range_x();
+    while(--counter) {
 
-    bool has_data = true;
-    while(has_data) {
-      if(!connection->runCommand(mongodb_db, query.obj(), result))
+      mongo::BSONObjBuilder query;
+      query << "findandmodify" << "benchmark_v1" <<
+          "query" << BSON("computed" << 0) <<
+          "update" << BSON("$inc" << BSON("computed" << 1)) <<
+          "upsert" << true <<
+          "new" << true;
+
+      mongo::BSONObj result;
+      if(!connection->runCommand(mongodb_db, query.obj(), result)) {
         assert(0);
-
-      has_data = false;
-      /* Extracting Data */
-      auto it = result.begin();
-
-      while(it.more() && !has_data) {
-        auto data_element = it.next();
-        if(!data_element.isABSONObj()) continue;
-
-        auto data_obj = data_element.Obj();
-        if(!data_obj.hasField("computed")) continue;
-
-        has_data = true;
-        //data_obj contains data we need
       }
     }
 
   }
+
+  delete connection;
 }
-BENCHMARK(BM_CappedFindAndModify)->Threads(1)->Arg(10);
+BENCHMARK(BM_CappedFindAndModify)->Threads(1)->Arg(100)->Arg(100000);
 
 BENCHMARK_MAIN();
